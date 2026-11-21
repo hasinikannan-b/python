@@ -1,1 +1,218 @@
+import random
+import time
+
+TITLES = {"dr", "mr", "mrs", "ms", "prof", "shri", "smt"}
+
+
+def normalise_number(text):
+    digits = "".join(ch for ch in text if ch.isdigit())
+    if len(digits) >= 10:
+        return digits[-10:]  # Drop a country code or leading zero.
+    return ""  # Too short to be used as a key.
+
+
+def normalise_name(text):
+    text = "".join(ch if ch.isalpha() or ch == " " else " " for ch in text.lower())
+    return " ".join(word for word in text.split() if word not in TITLES)
+
+
+def normalise_email(text):
+    return text.strip().lower()
+
+
+def names_match(name, known_names):
+    # Treat names as matching when one set of name words contains the other.
+    if name == "" or not known_names:
+        return True
+    words = set(name.split())
+    for other in known_names:
+        other_words = set(other.split())
+        if words <= other_words or other_words <= words:
+            return True
+    return False
+
+
+def merge_contacts(contacts):
+    groups = []  # Each group has sets of names, numbers, and emails.
+    by_number = {}  # A shared number can belong to multiple groups.
+    by_email = {}  # Normalised email -> group id.
+
+    for contact in contacts:
+        name = normalise_name(contact["name"])
+        numbers = {normalise_number(phone) for phone in contact["phones"]} - {""}
+        emails = {normalise_email(email) for email in contact["emails"]} - {""}
+        found = []
+
+        for number in numbers:
+            for group_id in by_number.get(number, []):
+                if names_match(name, groups[group_id]["names"]):
+                    if group_id not in found:
+                        found.append(group_id)
+                    break
+
+        for email in emails:
+            group_id = by_email.get(email)
+            if group_id is not None and group_id not in found:
+                found.append(group_id)
+
+        if not found:
+            groups.append({"names": set(), "numbers": set(), "emails": set()})
+            target = len(groups) - 1
+        else:
+            target = found[0]
+            # This contact connects groups that were previously separate.
+            for other in found[1:]:
+                for key in ("names", "numbers", "emails"):
+                    groups[target][key] |= groups[other][key]
+                    groups[other][key] = set()
+
+                for number in groups[target]["numbers"]:
+                    ids = [target if group_id == other else group_id
+                           for group_id in by_number[number]]
+                    by_number[number] = list(dict.fromkeys(ids))
+                for email in groups[target]["emails"]:
+                    by_email[email] = target
+
+        if name:
+            groups[target]["names"].add(name)
+        groups[target]["numbers"] |= numbers
+        groups[target]["emails"] |= emails
+
+        for number in numbers:
+            ids = by_number.setdefault(number, [])
+            if target not in ids:
+                ids.append(target)
+        for email in emails:
+            by_email[email] = target
+
+    return [group for group in groups
+            if group["names"] or group["numbers"] or group["emails"]]
+
+
+old_phone = [
+    {"name": "Dr. Ravi", "phones": ["+91 98400 12345"], "emails": ["ravi@mail.com"]},
+    {"name": "Priya S", "phones": ["98410 55555"], "emails": []},
+    {"name": "Suresh", "phones": ["044 23456789"], "emails": []},
+    {"name": "Anita", "phones": [], "emails": ["anita@mail.com"]},
+]
+sim_card = [
+    {"name": "ravi kumar", "phones": ["9840012345", "044-2345 6789"], "emails": []},
+    {"name": "PRIYA S.", "phones": ["+919841055555"], "emails": ["priya.s@mail.com"]},
+    {"name": "Anita R", "phones": [], "emails": ["ANITA@mail.com "]},
+    {"name": "", "phones": ["90000 00001"], "emails": []},
+]
+merged = merge_contacts(old_phone + sim_card)
+
+print("8 contacts in, merged contacts out:", len(merged))
+for group in merged:
+    print("  names {}  numbers {}  emails {}".format(
+        sorted(group["names"]), sorted(group["numbers"]), sorted(group["emails"])))
+
+
+# ---------- big test data ----------
+def make_words(first_letters, vowels, last_letters):
+    return [a + b + c for a in first_letters for b in vowels for c in last_letters]
+
+
+FIRST = make_words("bcdfghjklm", "aeiou", "nrst")  # 200 different first names.
+LAST = make_words("pqrstvwyz", "aeiou", "lmn")[:100]  # 100 different surnames.
+
+
+def person_contact(person, rng):
+    name = person["first"] + " " + person["last"]
+    shown = rng.choice([name, name.upper() + ".", "Dr. " + name, person["first"]])
+    phones = []
+    for digits in person["numbers"]:
+        formats = [digits, "+91 " + digits[:5] + " " + digits[5:], "0" + digits,
+                   "+91-" + digits, digits[:5] + "-" + digits[5:]]
+        phones.append(rng.choice(formats))
+    emails = []
+    if person["email"] and rng.random() < 0.5:
+        emails.append(rng.choice([person["email"], person["email"].upper() + " "]))
+    return {"name": shown, "phones": phones, "emails": emails}
+
+
+def make_data(n):
+    rng = random.Random(4)
+    m = int(n * 0.6)  # Number of different people.
+    people = []
+    used = set()
+
+    for i in range(m):
+        while True:
+            number = str(rng.randint(6000000000, 9999999999))
+            if number not in used:
+                used.add(number)
+                break
+        people.append({
+            "first": FIRST[i % 200],
+            "last": LAST[(i // 200) % 100] + "abc"[i // 20000],
+            "numbers": [number],
+            "email": "user{}@mail.com".format(i) if i % 3 == 0 else "",
+        })
+
+    # Every 50th person shares a landline with the next one.
+    for i in range(0, m - 1, 50):
+        landline = "44{:08d}".format(i)
+        people[i]["numbers"].append(landline)
+        people[i + 1]["numbers"].append(landline)
+        people[i + 1]["first"] = "z" + people[i + 1]["first"]
+
+    contacts = [person_contact(person, rng) for person in people]
+    contacts += [person_contact(rng.choice(people), rng) for _ in range(n - m)]
+    rng.shuffle(contacts)
+    return contacts, m
+
+
+def same_person(a, b):
+    # The pair-by-pair rule used for the O(n squared) alternative.
+    numbers_a = {normalise_number(phone) for phone in a["phones"]} - {""}
+    numbers_b = {normalise_number(phone) for phone in b["phones"]} - {""}
+    if numbers_a & numbers_b and names_match(
+            normalise_name(a["name"]), [normalise_name(b["name"])]) :
+        return True
+
+    emails_a = {normalise_email(email) for email in a["emails"]}
+    emails_b = {normalise_email(email) for email in b["emails"]}
+    return bool(emails_a & emails_b)
+
+
+def count_by_pairs(contacts):
+    labels = list(range(len(contacts)))
+    for i in range(len(contacts)):
+        for j in range(i):
+            if same_person(contacts[i], contacts[j]):
+                old, new = labels[i], labels[j]
+                if old != new:
+                    labels = [new if label == old else label for label in labels]
+    return len(set(labels))
+
+
+print()
+print("Dictionary method")
+print("contacts  people (truth)  merged contacts  time (s)")
+for n in [1000, 100000]:
+    contacts, people_count = make_data(n)
+    start = time.perf_counter()
+    result = merge_contacts(contacts)
+    elapsed = time.perf_counter() - start
+    print("{:8} {:15} {:16} {:9.4f}".format(
+        n, people_count, len(result), elapsed))
+
+print()
+print("Pair by pair method (counts the merged contacts only)")
+print("contacts  merged contacts  time (s)  pairs compared")
+times = {}
+for n in [500, 1000]:
+    contacts, people_count = make_data(n)
+    start = time.perf_counter()
+    groups = count_by_pairs(contacts)
+    times[n] = time.perf_counter() - start
+    print("{:8} {:16} {:9.3f} {:15}".format(
+        n, groups, times[n], n * (n - 1) // 2))
+
+per_pair = times[1000] / (1000 * 999 // 2)
+print("time per pair about {:.2f} microseconds".format(per_pair * 1e6))
+print("estimate for 100000 contacts: {:.1f} hours".format(
+    per_pair * 100000 * 99999 / 2 / 3600))
 
