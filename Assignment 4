@@ -1,1 +1,150 @@
+# fest/__init__.py
 
+"""College fest registration package."""
+# fest/reader.py
+
+def read_lines(path):
+    """Yield (line number, text) for every non-blank line of a department file."""
+    with open(path, "r", encoding="utf-8") as f:
+        for line_no, line in enumerate(f, start=1):
+            line = line.strip()
+            if line:
+                yield line_no, line
+# fest/validator.py
+class BadRecord(Exception):
+    """A registration line that cannot be accepted."""
+def valid_email(email):
+    """String methods only: one @, text before it, a dot inside the domain."""
+    if email == "" or " " in email or email.count("@") != 1:
+        return False
+    local, domain = email.split("@")
+    if local == "" or "." not in domain:
+        return False
+    if domain.startswith(".") or domain.endswith(".") or ".." in domain:
+        return False
+    return True
+def parse_registration(line):
+    """'reg,name,dept,email,event1;event2' -> (reg, name, dept, email, [events])"""
+    parts = [p.strip() for p in line.split(",")]
+    if len(parts) != 5:
+        raise BadRecord(f"expected 5 fields, found {len(parts)}")
+    reg, name, dept, email, events = parts
+    if not reg.isdigit():
+        raise BadRecord(f"register number {reg!r} is not numeric")
+    if name == "":
+        raise BadRecord("name is empty")
+    if not valid_email(email):
+        raise BadRecord(f"invalid e-mail {email!r}")
+    event_list = [e.strip().title() for e in events.split(";") if e.strip()]
+    if not event_list:
+        raise BadRecord("no event chosen")
+    return reg, name, dept, email.lower(), event_list
+# fest/writer.py
+import os
+def write_master(path, records):
+    with open(path, "w", encoding="utf-8") as out:
+        for reg, name, dept, email, events in records:
+            out.write(f"{reg},{name},{dept},{email},{';'.join(events)}\n")
+def write_event_lists(folder, by_event):
+    os.makedirs(folder, exist_ok=True)
+    for event, people in by_event.items():
+        with open(os.path.join(folder, event.replace(" ", "_") + ".txt"), "w", encoding="utf-8") as out:
+            for reg, name in people:
+                out.write(f"{reg} {name}\n")
+def write_log(path, errors):
+    with open(path, "w", encoding="utf-8") as out:
+        for source, line_no, message, text in errors:
+            where = f"{source} line {line_no}" if line_no else source
+            out.write(f"{where}: {message}" + (f" -> {text!r}" if text else "") + "\n")
+def write_summary(path, summary):
+    with open(path, "w", encoding="utf-8") as out:
+        for key, value in summary.items():
+            out.write(f"{key}: {value}\n")
+# demo6.py
+# Task 6 - Stage 5: implement and demonstrate the fest registration package
+import os, tempfile, time
+
+def process_fest(in_folder, dept_files, out_folder):
+    seen = set()                                  # register numbers already accepted
+    master, by_event, errors = [], {}, []
+    lines_read = 0
+    for dept_file in dept_files:
+        path = os.path.join(in_folder, dept_file)
+        read_here = 0                             # lines read from this file only
+        try:
+            for line_no, line in read_lines(path):
+                lines_read += 1
+                read_here += 1
+                try:
+                    record = parse_registration(line)
+                except BadRecord as e:
+                    errors.append((dept_file, line_no, str(e), line))
+                    continue
+                reg, name, dept, email, events = record
+                if reg in seen:
+                    errors.append((dept_file, line_no, f"duplicate registration of {reg}", line))
+                    continue
+                seen.add(reg)
+                master.append(record)
+                for event in events:
+                    by_event.setdefault(event, []).append((reg, name))
+        except FileNotFoundError:
+            errors.append((dept_file, 0, "department file is missing", ""))
+        except UnicodeDecodeError as e:
+            errors.append((dept_file, 0,
+                           f"file cannot be decoded ({e.reason}); {read_here} line(s) read before the damage", ""))
+
+
+    os.makedirs(out_folder, exist_ok=True)
+    write_master(os.path.join(out_folder, "master_list.csv"), master)
+    write_event_lists(os.path.join(out_folder, "events"), by_event)
+    write_log(os.path.join(out_folder, "errors.log"), errors)
+    summary = {"lines read": lines_read, "accepted": len(master), "rejected": len(errors),
+               "events": ", ".join(f"{e}={len(p)}" for e, p in sorted(by_event.items()))}
+    write_summary(os.path.join(out_folder, "summary.txt"), summary)
+    return master, by_event, errors, summary
+# ---------- demonstration data ---------
+src = tempfile.mkdtemp(); out = os.path.join(tempfile.mkdtemp(), "out")
+files = {
+ "CSE.txt": "192311001,Anitha,CSE,anitha@simats.edu,hackathon;quiz\n"
+            "192311002,Bharath,CSE,Bharath@Simats.edu,dance\n"
+            "192311001,Anitha,CSE,anitha@simats.edu,quiz\n"          # duplicate, same file
+            "\n"
+            "192311003,Chitra,CSE,chitra.simats.edu,quiz\n"          # no @
+            "192311004,Dev,CSE\n",                                   # damaged line
+ "ECE.txt": "192311005,Esha,ECE,esha@simats.edu,Hackathon\n"
+            "192311002,Bharath,ECE,bharath@simats.edu,quiz\n"        # duplicate, other department
+            "192311006,Farid,ECE,farid@@simats.edu,dance\n"          # two @
+            "192311007,Gita,ECE,gita@simats,quiz\n"                  # no dot in domain
+            "192311008,Hari,ECE,hari@simats.edu,\n",                 # no event
+}
+for name, text in files.items():
+    with open(os.path.join(src, name), "w", encoding="utf-8") as f:
+        f.write(text)
+with open(os.path.join(src, "IT.txt"), "wb") as f:
+    f.write(b"192311009,Indu,IT,indu@simats.edu,quiz\n\xff\xfe\n")   # damaged bytes
+dept_files = ["CSE.txt", "ECE.txt", "MECH.txt", "IT.txt"]            # MECH.txt does not exist
+master, by_event, errors, summary = process_fest(src, dept_files, out)
+for rel in ("master_list.csv", "events/Hackathon.txt", "events/Quiz.txt", "events/Dance.txt", 
+    "errors.log", "summary.txt"):
+    print("==", rel, "==")
+    with open(os.path.join(out, rel), encoding="utf-8") as f:
+        print(f.read())
+# ---------- alternative design : list against set for the duplicate check ---------
+print("== duplicate check: list of seen numbers against a set ==")
+for n in (2000, 5000, 10000):
+    regs = [str(192300000 + i) for i in range(n)]
+    t = time.perf_counter(); seen_list = []
+    for r in regs:
+        if r in seen_list:
+            continue
+        seen_list.append(r)
+    t_list = time.perf_counter() - t
+    t = time.perf_counter(); seen_set = set()
+    for r in regs:
+
+        if r in seen_set:
+            continue
+        seen_set.add(r)
+    t_set = time.perf_counter() - t
+    print(f"n = {n:6d}   list {t_list:.4f} s   set {t_set:.5f} s")
