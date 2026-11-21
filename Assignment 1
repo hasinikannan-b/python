@@ -1,1 +1,73 @@
+from decimal import Decimal, ROUND_HALF_UP
 
+RATE_CARDS = {
+
+    "STANDARD": {"BASE_RATE": "30.00", "FAT_STEP_VALUE": "0.40",
+                 "SNF_STEP_VALUE": "0.30"},
+
+    "SEASONAL": {"BASE_RATE": "32.00", "FAT_STEP_VALUE": "0.45",   # Apr - Jun
+                 "SNF_STEP_VALUE": "0.30"},
+}
+BONUS_THRESHOLD = Decimal("500.00")   # litres in the 10-day period
+BONUS_RATE = Decimal("0.50")          # Rs per litre, given on every shift
+def calculate_rate(fat_str, snf_str, season="STANDARD"):
+    """Exact rate per litre; half a step (e.g. 7.5) rounds away from zero."""
+    card = RATE_CARDS[season]
+    base_rate = Decimal(card["BASE_RATE"])
+
+    fat_step_val = Decimal(card["FAT_STEP_VALUE"])
+    snf_step_val = Decimal(card["SNF_STEP_VALUE"])
+    fat = Decimal(str(fat_str))
+    snf = Decimal(str(snf_str))
+    fat_steps = ((fat - Decimal("3.5")) / Decimal("0.1")
+                 ).to_integral_value(rounding=ROUND_HALF_UP)
+    snf_steps = ((snf - Decimal("8.5")) / Decimal("0.1")
+                 ).to_integral_value(rounding=ROUND_HALF_UP)
+    rate = base_rate + fat_steps * fat_step_val + snf_steps * snf_step_val
+    return rate.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+def process_10_day_ledger(farmer_id, records, season="STANDARD"):
+    """Pass 1 totals the litres, pass 2 applies the bonus if litres > 500."""
+    total_litres = Decimal("0.00")
+    validated_shifts = []
+    for shift in records:
+        litres = Decimal(str(shift["litres"]))
+        total_litres += litres
+        rate = calculate_rate(shift["fat"], shift["snf"], season)
+        validated_shifts.append({"litres": litres, "fat": shift["fat"],
+                                 "snf": shift["snf"], "rate": rate})
+    bonus_applied = total_litres > BONUS_THRESHOLD
+    final_total_payout = Decimal("0.00")
+    print(f"\n--- Ledger Statement for {farmer_id} ({season} season) ---")
+    print(f"Total Period Volume: {total_litres:.2f} L | "
+          f"Bonus Eligible: {bonus_applied}")
+    print(f"{'Litres':>8} | {'Fat%':>5} | {'SNF%':>5} | {'Base Rate':>9} | "
+          f"{'Bonus/L':>7} | {'Final Payout':>12}")
+    print("-" * 65)
+    for shift in validated_shifts:
+        bonus_per_litre = BONUS_RATE if bonus_applied else Decimal("0.00")
+        actual_rate = shift["rate"] + bonus_per_litre
+        final_payout = (shift["litres"] * actual_rate).quantize(
+            Decimal("0.01"), rounding=ROUND_HALF_UP)
+        final_total_payout += final_payout
+        print(f"{shift['litres']:>8.2f} | {shift['fat']:>5} | "
+              f"{shift['snf']:>5} | {shift['rate']:>9.2f} | "
+              f"{bonus_per_litre:>7.2f} | {final_payout:>12.2f}")
+    print("-" * 65)
+    print(f"Accumulated 10-Day Period Total Payout: Rs {final_total_payout:.2f}")
+    return final_total_payout
+if __name__ == "__main__":
+    # Scenario 1: standard season, 350 L (below the bonus threshold)
+    small_batch = [
+        {"litres": "200.00", "fat": "4.25", "snf": "8.75"},
+        {"litres": "150.00", "fat": "3.15", "snf": "8.35"},
+    ]
+    process_10_day_ledger("Farmer_01", small_batch, season="STANDARD")
+    # Scenario 2: seasonal rate (May), 550 L (bonus applies)
+    large_batch_seasonal = [
+        {"litres": "300.00", "fat": "4.25", "snf": "8.75"},
+        {"litres": "250.00", "fat": "3.50", "snf": "8.50"},
+    ]
+    process_10_day_ledger("Farmer_02", large_batch_seasonal, season="SEASONAL")
+    # Scenario 3: exactly 500 L, to test the "more than" boundary
+    boundary_batch = [{"litres": "500.00", "fat": "3.50", "snf": "8.50"}]
+    process_10_day_ledger("Farmer_03", boundary_batch, season="STANDARD")
