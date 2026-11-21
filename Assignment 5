@@ -1,1 +1,346 @@
+PROGRAM 1
+
+import re
+import sys
+import time
+import tracemalloc
+from collections import Counter
+
+POSITIVE = {"good", "clean", "fast", "helpful", "improved"}
+NEGATIVE = {"bad", "dirty", "slow", "rude", "smoke", "broken"}
+NEGATORS = {"not", "never", "no"}
+
+
+def score(text):
+    """Add one per positive word and subtract one per negative word.
+
+    A word immediately preceded by a negator has its value flipped.
+    """
+    words = text.lower().replace(".", " ").replace(",", " ").split()
+    total = 0
+    prev = ""
+    for word in words:
+        value = 1 if word in POSITIVE else -1 if word in NEGATIVE else 0
+        if prev in NEGATORS:
+            value = -value
+        total += value
+        prev = word
+    return total
+
+
+def label(text):
+    value = score(text)
+    return "positive" if value > 0 else "negative" if value < 0 else "neutral"
+
+
+for comment in [
+        "Roads are clean and the bus was fast.",
+        "Smoke from the factory, air is bad.",
+        "The staff were not helpful.",
+        "Not bad, service improved."]:
+    print("{:<8} | {}".format(label(comment), comment))
+
+# Complaints with manually assigned labels.
+complaints = [
+    ("The air near Guindy is dirty and the smoke is very bad.", "negative"),
+    ("Roads are clean and the bus was fast.", "positive"),
+    ("The staff were not helpful at the Adyar office.", "negative"),
+    ("Not bad, service improved.", "positive"),
+    ("Smoke from the factory in Manali makes it hard to breathe.", "negative"),
+    ("The online PM2.5 display is slow and often broken.", "negative"),
+    ("Very helpful officer, my complaint was solved fast.", "positive"),
+    ("The reading board at the bus stop is not working.", "negative"),
+    ("Please tell me the PM2.5 level in Velachery.", "neutral"),
+    ("The new sensor at Alandur is good and the app is clean to use.", "positive"),
+    ("Garbage burning every night, the air is bad.", "negative"),
+    ("The customer care person was rude and slow.", "negative"),
+    ("I never got a reply to my complaint.", "negative"),
+    ("Dust from the construction site has made our street dirty.", "negative"),
+    ("The helpline was not slow today.", "positive"),
+    ("Thank you, the pollution level has improved this month.", "positive"),
+    ("No clean drinking water and the air is also bad.", "negative"),
+    ("When will the new station open in Perungudi?", "neutral"),
+    ("The truck smoke near the signal is terrible.", "negative"),
+    ("Great work by the board, the monitoring is fast and helpful.", "positive"),
+    ("The website is broken and the data is not updated.", "negative"),
+    ("I am happy with the new bus service.", "positive"),
+    ("The park is clean but the road next to it is dirty.", "neutral"),
+    ("Not helpful, the officer was rude.", "negative"),
+    ("My complaint about burning waste was not solved.", "negative"),
+    ("Excellent response, the problem was fixed quickly.", "positive"),
+    ("The air quality alert came fast and was helpful.", "positive"),
+    ("Factory smoke is bad again today.", "negative"),
+    ("No problem with the air today, it is clean.", "positive"),
+    ("The staff never listen and are rude.", "negative"),
+    ("The data portal is slow.", "negative"),
+    ("Please share last week's PM2.5 report for Adyar.", "neutral"),
+    ("Oh great, another day of dirty air and nobody helpful.", "negative"),
+    ("The new filter is not good, my area is still dirty.", "negative"),
+    ("Very clean roads after the cleaning drive, good job.", "positive"),
+    ("The monitoring station was broken for two weeks.", "negative"),
+    ("The bus was late and crowded.", "negative"),
+    ("I want to know who is responsible for the smoke.", "negative"),
+    ("Service improved after I called the helpline.", "positive"),
+    ("The reading is high today.", "neutral"),
+    ("Water supply is dirty and slow to fix.", "negative"),
+    ("No one came to check the dust problem.", "negative"),
+    ("The app is fast and clean, but the alerts are not helpful.", "neutral"),
+    ("I appreciate the quick action by the team.", "positive"),
+    ("Burning plastic smell and smoke near the school.", "negative"),
+    ("Good morning, how do I register a complaint?", "neutral"),
+    ("The officer was helpful and polite.", "positive"),
+    ("Not clean, not good, very bad.", "negative"),
+    ("The PM2.5 chart is not slow anymore.", "positive"),
+    ("The drain smells and the road is broken.", "negative"),
+]
+
+agree = 0
+wrong = []
+for text, manual_label in complaints:
+    predicted = label(text)
+    if predicted == manual_label:
+        agree += 1
+    else:
+        wrong.append((manual_label, predicted, text))
+
+print("\nAgreement with my own reading: {} of {} = {:.0%}".format(
+    agree, len(complaints), agree / len(complaints)))
+confusion = Counter((manual, predicted) for manual, predicted, _ in wrong)
+print("Disagreements (my label -> scorer label):", dict(confusion))
+print("Examples:")
+for manual, predicted, text in wrong[:6]:
+    print("   me: {:<8} scorer: {:<8} | {}".format(manual, predicted, text))
+
+start = time.perf_counter()
+for _ in range(2000):
+    for text, _manual_label in complaints:
+        label(text)
+per_complaint = (time.perf_counter() - start) / (2000 * len(complaints))
+print("\nTime per complaint (scorer): {:.1f} microseconds".format(
+    per_complaint * 1e6))
+word_list_size = (sys.getsizeof(POSITIVE) + sys.getsizeof(NEGATIVE)
+                  + sys.getsizeof(NEGATORS))
+print("Size of the three word lists:", word_list_size, "bytes")
+
+# Extractive summariser.
+STOP = {
+    "the", "a", "an", "is", "are", "was", "were", "i", "am", "to", "of",
+    "in", "at", "and", "it", "for", "on", "our", "my", "we", "this", "that",
+    "with", "by", "from", "as", "me", "you", "please", "very", "every", "has",
+    "have", "can", "could", "he", "she", "so", "us", "your", "his"
+}
+
+
+def sentences_of(text):
+    return [sentence.strip() for sentence in re.split(r"(?<=[.!?])\s+", text.strip())
+            if sentence.strip()]
+
+
+def important_words(sentence):
+    return [word for word in re.findall(r"[a-z0-9']+", sentence.lower())
+            if word not in STOP]
+
+
+def summarise(text, k=2):
+    sentences = sentences_of(text)
+    frequencies = Counter(word for sentence in sentences
+                          for word in important_words(sentence))
+    scores = [sum(frequencies[word] for word in important_words(sentence))
+              for sentence in sentences]
+    best = sorted(range(len(sentences)), key=lambda index: -scores[index])[:k]
+    return " ".join(sentences[index] for index in sorted(best))
+
+
+def first_k(text, k=2):
+    """Return the first k complete sentences without scanning the remaining text."""
+    output = []
+    position = 0
+    sentence_pattern = re.compile(r"[^.!?]*[.!?]")
+    for _ in range(k):
+        match = sentence_pattern.match(text, position)
+        if not match:
+            break
+        output.append(match.group().strip())
+        position = match.end()
+    return " ".join(output)
+
+
+long_complaints = [
+    ("Good evening sir. I am writing from Manali New Town. "
+     "For three months thick black smoke is coming from the factory near our school every night. "
+     "The smoke makes the children cough and the smell enters our houses. "
+     "Please check the factory chimney and take action.", 3),
+    ("I live in Guindy near the flyover. I use the bus to go to work every day. "
+     "Dust from the construction site is covering our street and shops. "
+     "The dust makes breathing difficult for old people. "
+     "The construction company never sprinkles water on the road.", 3),
+    ("Hello. My name is Ravi and I am a teacher. "
+     "The PM2.5 display board at Adyar bus stop shows the wrong value. "
+     "Yesterday the board showed 5 but the air was very smoky. "
+     "Please repair the display board.", 3),
+    ("The garbage is burned in the open ground behind our apartment. "
+     "This happens every night after nine. "
+     "The burning garbage makes the air bad and our windows are full of black dust. "
+     "We told the zone office many times but nobody came.", 1),
+    ("I called the helpline yesterday. The person who answered was rude. "
+     "He said he could not help. I wanted to report the sewage smell near the Adyar river. "
+     "The smell is very bad in the evening.", 4),
+    ("Thank you for the new monitoring station in Alandur. The app is easy to use. "
+     "The alerts come on time. But the station reading is stuck at the same number for two days. "
+     "Please check the sensor.", 4),
+]
+
+print("\nSummariser test (k = 2). Number in brackets = sentence that carries the main complaint (my reading)")
+hit_summary = 0
+hit_first = 0
+for index, (text, key_sentence) in enumerate(long_complaints, 1):
+    sentences = sentences_of(text)
+    summary = summarise(text)
+    first_sentences = first_k(text)
+    kept_in_summary = sentences[key_sentence - 1] in summary
+    kept_in_first = sentences[key_sentence - 1] in first_sentences
+    hit_summary += kept_in_summary
+    hit_first += kept_in_first
+    print("  Complaint {} [{}]  frequent-words: {} | first-2: {}".format(
+        index, key_sentence, "kept" if kept_in_summary else "MISSED",
+        "kept" if kept_in_first else "MISSED"))
+    print("     frequent-words summary:", summary)
+print("Main complaint kept: frequent-words method {} of 6, first-two-sentences method {} of 6".format(
+    hit_summary, hit_first))
+
+print("\nTime and memory for a long complaint (sentences repeated)")
+print("{:>10} {:>12} {:>15} {:>9} {:>11}".format(
+    "sentences", "freq time s", "first-2 time s", "freq MB", "first-2 MB"))
+for count in (1000, 10000, 100000):
+    text = " ".join(long_complaints[index % 6][0]
+                    for index in range(count // 5 + 1))
+    start = time.perf_counter()
+    summarise(text)
+    summary_time = time.perf_counter() - start
+    start = time.perf_counter()
+    first_k(text)
+    first_time = time.perf_counter() - start
+
+    tracemalloc.start()
+    try:
+        summarise(text)
+        summary_memory = tracemalloc.get_traced_memory()[1] / 1e6
+    finally:
+        tracemalloc.stop()
+
+    tracemalloc.start()
+    try:
+        first_k(text)
+        first_memory = tracemalloc.get_traced_memory()[1] / 1e6
+    finally:
+        tracemalloc.stop()
+
+    print("{:>10,} {:>12.4f} {:>15.6f} {:>9.2f} {:>11.4f}".format(
+        len(sentences_of(text)), summary_time, first_time,
+        summary_memory, first_memory))
+
+# Rule-based chatbot backed by a small in-memory database.
+import sqlite3
+
+con = sqlite3.connect(":memory:")
+con.execute("CREATE TABLE aq (station TEXT, day TEXT, pm25 REAL)")
+con.executemany("INSERT INTO aq VALUES (?, ?, ?)", [
+    ("Adyar", "2026-10-01", 48.0),
+    ("Adyar", "2026-10-04", 60.0),
+    ("Guindy", "2026-10-01", 95.0),
+    ("Guindy", "2026-10-03", 121.0),
+])
+KNOWN = {"adyar": "Adyar", "guindy": "Guindy", "manali": "Manali"}
+
+
+def chatbot(question):
+    words = re.findall(r"[a-z0-9.']+", question.lower())
+    station = next((KNOWN[word] for word in words if word in KNOWN), None)
+    if "pm2.5" in words or "pm25" in words or "air" in words:
+        if station is None:
+            return "Which station do you mean? I know Adyar, Guindy and Manali."
+        row = con.execute(
+            "SELECT day, pm25 FROM aq WHERE station = ? ORDER BY day DESC LIMIT 1",
+            (station,)).fetchone()
+        if row is None:
+            return "I have no readings for {} yet.".format(station)
+        return "Latest PM2.5 at {}: {} ug/m3 on {}.".format(station, row[1], row[0])
+    if "complaint" in words:
+        return "To register a complaint, please type it in one message."
+    return "Sorry, I did not understand. Ask about the PM2.5 of a station."
+
+
+print("\nChatbot test")
+for question in [
+        "What is the PM2.5 in Adyar today?",
+        "air quality in Guindy",
+        "PM2.5?",
+        "How is the PM2.5 in Manali?",
+        "Is it safe to take my child out in Adyar?",
+        "What was the PM2.5 in Adyar last month?"]:
+    print("  Q: {}\n  A: {}".format(question, chatbot(question)))
+
+
+PROGRAM 2
+
+import random
+import sqlite3
+import time
+from datetime import date, timedelta
+rng = random.Random(1)
+con = sqlite3.connect(":memory:")
+con.execute("CREATE TABLE readings (station TEXT, day TEXT, slot INTEGER, pm25 REAL)")
+def generate():
+    days = [(date(2026, 1, 1) + timedelta(days=d)).isoformat() for d in range(365)]
+    for s in range(12):                       # demo scale: present stations, hourly readings
+        for d in days:
+            for h in range(24):
+                yield (f"S{s:03d}", d, h, round(rng.uniform(20, 160), 1))
+    for s in range(10):                       # demo scale: new stations, 15-minute readings
+        for d in days:
+            for q in range(96):
+                yield (f"T{s:03d}", d, q, round(rng.uniform(20, 160), 1))
+t0 = time.perf_counter()
+con.executemany("INSERT INTO readings VALUES (?, ?, ?, ?)", generate())
+con.commit()
+rows = con.execute("SELECT COUNT(*) FROM readings").fetchone()[0]
+print(f"rows in one year at the demo scale: {rows:,}  (load time {time.perf_counter() - t0:.1f} s)")
+QUERIES = {
+    "Q1 mean of one station in October": ("SELECT AVG(pm25) FROM readings WHERE station = 'T009' "
+                                           "AND day BETWEEN '2026-10-01' AND '2026-10-31'"),
+    "Q2 worst station-day": ("SELECT station, day, AVG(pm25) AS m FROM readings "
+                              "GROUP BY station, day ORDER BY m DESC LIMIT 1"),
+        "Q3 days above 60 for one station": ("SELECT COUNT(*) FROM (SELECT day FROM readings WHERE "
+                                          "station = 'S007' "
+                                          "GROUP BY day HAVING AVG(pm25) > 60)"),
+}
+def timeit(sql, repeat):
+    best = 1e9
+    for _ in range(repeat):
+        t0 = time.perf_counter()
+        con.execute(sql).fetchall()
+        best = min(best, time.perf_counter() - t0)
+    return best
+before = {name: timeit(sql, 1) for name, sql in QUERIES.items()}
+print("\nQuery plan of Q1 before the index:")
+for row in con.execute("EXPLAIN QUERY PLAN " + QUERIES["Q1 mean of one station in October"]):
+    print("  ", row[3])
+t0 = time.perf_counter()
+con.execute("CREATE INDEX idx_station_day ON readings (station, day)")
+t_index = time.perf_counter() - t0
+after = {name: timeit(sql, 1) for name, sql in QUERIES.items()}
+print("\nQuery plan of Q1 after the index:")
+for row in con.execute("EXPLAIN QUERY PLAN " + QUERIES["Q1 mean of one station in October"]):
+    print("  ", row[3])
+print(f"\nIndex build time: {t_index:.2f} s")
+print(f"{'query':<36} {'no index (s)':>13} {'with index (s)':>15} {'speed-up':>9}")
+for name in QUERIES:
+        print(f"{name:<36} {before[name]:>13.4f} {after[name]:>15.5f} "
+          f"{before[name] / after[name]:>8.1f}x")
+con.execute("DROP INDEX idx_station_day")
+con.execute("CREATE INDEX idx_cover ON readings (station, day, pm25)")
+cover = {name: timeit(sql, 1) for name, sql in QUERIES.items()}
+print("\nWith a covering index (station, day, pm25):")
+for name in QUERIES:
+    print(f"   {name:<36} {cover[name]:.5f} s")
 
